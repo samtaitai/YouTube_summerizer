@@ -134,9 +134,8 @@ def summarize_youtube_video(agents_client: AgentsClient, youtube_url: str):
     # The assistant's reply will be the last message in the thread.
     if thread_messages:
         # Extract text from each content part of the last message
-        final_content = " ".join(
-            part.text for part in thread_messages[-1].content if hasattr(part, "text")
-        )
+        last_message = thread_messages[0]
+        final_content = last_message.content[0].text['value'] if last_message.content[0].type == "text" else "No text content found."
         print("\n--- FINAL SUMMARY ---\n")
         print(final_content)
         print("\n---------------------\n")
@@ -150,7 +149,7 @@ if __name__ == "__main__":
         agents_client = get_agents_client()
         
         # Example URL (replace with your test URL)
-        test_url = "https://www.youtube.com/watch?v=k4E_H5bH38U" 
+        test_url = "https://youtu.be/YlCfCJjYlTY?si=uDXA0j1u7Hao7zah" 
         
         summarize_youtube_video(agents_client, test_url)
  
