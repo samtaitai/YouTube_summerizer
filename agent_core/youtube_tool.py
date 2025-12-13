@@ -25,7 +25,7 @@ def get_transcript_text(youtube_url: str) -> str:
         # Combine the transcript parts into a single string
         full_transcript = " ".join([item['text'] for item in transcript_list])
         
-        return f"SUCCESS: Transcript retrieved. Length: {len(full_transcript)} characters. Now, summarize the following text: {full_transcript}"
+        return full_transcript
         
     except Exception as e:
         # Handle cases where the video has no captions
