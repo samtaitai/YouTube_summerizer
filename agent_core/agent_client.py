@@ -2,9 +2,19 @@ import os
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
 from azure.ai.agents import AgentsClient
-from azure.ai.agents.models import FunctionTool, ToolSet, MessageRole, FunctionDefinition
-from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
-from typing import Set
+from azure.ai.projects import AIProjectClient
+from azure.ai.agents.models import (
+    AgentEventHandler,
+    FunctionTool,
+    ListSortOrder,
+    MessageDeltaChunk,
+    RequiredFunctionToolCall,
+    RunStep,
+    SubmitToolOutputsAction,
+    ThreadMessage,
+    ThreadRun,
+    ToolOutput,
+)
 
 # Import your custom tool function from the local file
 from .youtube_tool import get_transcript_text
@@ -12,15 +22,75 @@ from .youtube_tool import get_transcript_text
 # --- Configuration ---
 load_dotenv() 
 
-MODEL_DEPLOYMENT_NAME = os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4o") 
-AGENT_NAME = "YouTubeSummarizerAgent"
-# Ensure the ID is safe and consistent
-AGENT_ID = f"asst_{AGENT_NAME.lower().replace('-', '_')}" 
+project_endpoint = os.getenv("PROJECT_ENDPOINT")
+model_name = os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4o")
+project_client = AIProjectClient(
+    endpoint=project_endpoint,
+    credential=DefaultAzureCredential()
+)
+user_functions = {get_transcript_text}
+functions = FunctionTool(user_functions)
+agent_instructions = (
+        "You are an expert YouTube summarizer. Your only job is to analyze the user's input. "
+        "If the input contains a YouTube URL, you MUST call the `get_transcript_text` function tool "
+        "first. Once you receive the transcript, generate a concise, easy-to-read summary of the key points. "
+        "If the transcript fails, report the error. Do NOT invent information."
+    )
 
-# Define the list of custom tools the agent can use.
-# The FunctionTool inspects the Python function, including its docstring and
-# signature, to understand how to call it.
-YOUTUBE_TOOLS = FunctionTool(functions={get_transcript_text})
+class MyEventHandler(AgentEventHandler):
+
+    def __init__(self, functions: FunctionTool) -> None:
+        super().__init__()
+        self.functions = functions
+
+    def on_message_delta(self, delta: "MessageDeltaChunk") -> None:
+        print(f"Text delta received: {delta.text}")
+
+    def on_thread_message(self, message: "ThreadMessage") -> None:
+        print(f"ThreadMessage created. ID: {message.id}, Status: {message.status}")
+
+    def on_thread_run(self, run: "ThreadRun") -> None:
+        print(f"ThreadRun status: {run.status}")
+
+        if run.status == "failed":
+            print(f"Run failed. Error: {run.last_error}")
+
+        if run.status == "requires_action" and isinstance(run.required_action, SubmitToolOutputsAction):
+            tool_calls = run.required_action.submit_tool_outputs.tool_calls
+
+            tool_outputs = []
+            for tool_call in tool_calls:
+                if isinstance(tool_call, RequiredFunctionToolCall):
+                    try:
+                        output = functions.execute(tool_call)
+                        tool_outputs.append(
+                            ToolOutput(
+                                tool_call_id=tool_call.id,
+                                output=output,
+                            )
+                        )
+                    except Exception as e:
+                        print(f"Error executing tool_call {tool_call.id}: {e}")
+
+            print(f"Tool outputs: {tool_outputs}")
+            if tool_outputs:
+                # Once we receive 'requires_action' status, the next event will be DONE.
+                # Here we associate our existing event handler to the next stream.
+                agents_client.runs.submit_tool_outputs_stream(
+                    thread_id=run.thread_id, run_id=run.id, tool_outputs=tool_outputs, event_handler=self
+                )
+
+    def on_run_step(self, step: "RunStep") -> None:
+        print(f"RunStep type: {step.type}, Status: {step.status}")
+
+    def on_error(self, data: str) -> None:
+        print(f"An error occurred. Data: {data}")
+
+    def on_done(self) -> None:
+        print("Stream completed.")
+
+    def on_unhandled_event(self, event_type: str, event_data: Any) -> None:
+        print(f"Unhandled Event Type: {event_type}, Data: {event_data}")
 
 # --- Core Agent Logic ---
 
@@ -36,111 +106,56 @@ def get_agents_client() -> AgentsClient:
     )
     return agents_client
 
-def get_agent_config():
-    """Defines the common configuration parameters for create/update."""
-    
-    # 1. Create a ToolSet from the list of defined tools.
-    toolset = ToolSet()
-    toolset.add(YOUTUBE_TOOLS)
-    
-    # 3. Define the instructions (System Prompt)
-    agent_instructions = (
-        "You are an expert YouTube summarizer. Your only job is to analyze the user's input. "
-        "If the input contains a YouTube URL, you MUST call the `get_transcript_text` function tool "
-        "first. Once you receive the transcript, generate a concise, easy-to-read summary of the key points. "
-        "If the transcript fails, report the error. Do NOT invent information."
-    )
-    
-    return {
-        "model": MODEL_DEPLOYMENT_NAME,
-        "name": AGENT_NAME,
-        "instructions": agent_instructions,
-        "toolset": toolset,
-    }
-
-def create_or_update_summarizer_agent(client: AgentsClient):
-    """
-    Checks if the agent exists. If yes, updates it. If no, creates it.
-    """
-    config = get_agent_config()
-    
-    try:
-        # 1. Check if the agent exists
-        client.get_agent(agent_id=AGENT_ID)
-        
-        # 2. If it exists, update it
-        print(f"🔄 Agent with ID '{AGENT_ID}' found. Updating configuration...")
-        agent = client.update_agent(
-            agent_id=AGENT_ID,
-            model=config["model"],
-            instructions=config["instructions"],
-            toolset=config["toolset"],
-            name=config["name"]
-        )
-        print(f"✅ Agent '{agent.name}' (ID: {agent.id}) updated.")
-        return agent
-
-    except ResourceNotFoundError:
-        # 3. If it does NOT exist (404), create it
-        print(f"➕ Agent with ID '{AGENT_ID}' not found. Creating a new one...")
-        agent = client.create_agent(**config)
-        print(f"✅ Agent '{agent.name}' (ID: {agent.id}) created.")
-        return agent
-    
-    except HttpResponseError as e:
-        # Catch any other HTTP-related errors (permissions, bad model name, etc.)
-        print(f"❌ An HTTP error occurred during agent management: Status {e.status_code}. Message: {e.message}")
-        raise e
-
 def summarize_youtube_video(agents_client: AgentsClient, youtube_url: str):
     """
     Creates a thread, sends the URL, runs the agent, and retrieves the summary.
     """
     print(f"\n--- Starting Summarization for: {youtube_url} ---")
     
-    # Ensure the agent exists and tools are registered
-    agent = create_or_update_summarizer_agent(agents_client)
+    with project_client:
+        agents_client = project_client.agents
+        functions = FunctionTool(user_functions)
+        agent = agents_client.create_agent(
+            model=model_name,
+            name="YouTubeSummarizerAgent",
+            instructions=agent_instructions,
+            tools=functions.definitions,
+        )
+        # [END create_agent_with_function_tool]
+        print(f"Created agent, ID: {agent.id}")
 
-    # 1. Send the URL message
-    user_message = f"Please summarize the content of this YouTube video: {youtube_url}"
-    
-    print(f"🔑 Creating thread and processing run with Agent ID: {agent.id}")
-    
-    # Create a ToolSet containing the callable Python functions for local execution.
-    local_toolset = ToolSet()
-    local_toolset.add(YOUTUBE_TOOLS)
-    
-    # Create a thread and process the run with the initial user message.
-    run = agents_client.create_thread_and_process_run(
-        agent_id=agent.id,
-        toolset=local_toolset, # Provide the ToolSet for local execution
-        thread={ # The initial message to start the conversation
-            "messages": [{"role": MessageRole.USER, "content": user_message}]
-        }
-    )
-    
-    # 2. Extract the thread ID from the run object
-    thread_id = run.thread_id
-    
-    # 3. Check status and retrieve the final message (rest of the logic remains)
-    if run.status == "failed":
-        print(f"❌ Agent Run Failed: {run.error.message}")
-        return
-        
-    # Use the .messages property on the AgentsClient to get the MessagesOperations,
-    # then call list() to retrieve all messages for the given thread_id.
-    thread_messages = list(agents_client.messages.list(thread_id=thread_id))
+        thread = agents_client.threads.create()
+        print(f"Created thread, ID: {thread.id}")
 
-    # The assistant's reply will be the last message in the thread.
-    if thread_messages:
-        # Extract text from each content part of the last message
-        last_message = thread_messages[0]
-        final_content = last_message.content[0].text['value'] if last_message.content[0].type == "text" else "No text content found."
-        print("\n--- FINAL SUMMARY ---\n")
-        print(final_content)
-        print("\n---------------------\n")
-    else:
-        print("🤷 Could not retrieve final summary message.")
+        # Send the URL message
+        user_message = f"Please summarize the content of this YouTube video: {youtube_url}"
+
+        message = agents_client.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=user_message
+        )
+
+        with agents_client.runs.stream(
+            thread_id=thread.id,
+            agent_id=agent.id,
+            event_handler=MyEventHandler(functions)
+        ) as stream:
+            stream.until_done()
+
+        agents_client.delete_agent(agent_id=agent.id)
+        print("Deleted agent.")
+
+        messages = agents_client.messages.list(thread_id=thread.id, order=ListSortOrder.ASCENDING)     
+        for msg in messages:
+            if msg.text_messages:
+                last_text = msg.text_messages[-1]
+                print("\n--- FINAL SUMMARY ---\n")
+                print(last_text.text['value'])
+                print("\n---------------------\n")
+            
+            else:
+                print("🤷 Could not retrieve final summary message.")
 
 # --- Main Execution Block ---
 
@@ -149,7 +164,7 @@ if __name__ == "__main__":
         agents_client = get_agents_client()
         
         # Example URL (replace with your test URL)
-        test_url = "https://youtu.be/YlCfCJjYlTY?si=uDXA0j1u7Hao7zah" 
+        test_url = "https://youtu.be/EwAd-fqQfJ8?si=WXbIn7IaHRpBJ8yQ" 
         
         summarize_youtube_video(agents_client, test_url)
  
