@@ -16,10 +16,6 @@ load_dotenv()
 
 project_endpoint = os.getenv("PROJECT_ENDPOINT")
 model_name = os.getenv("MODEL_DEPLOYMENT_NAME", "gpt-4o")
-project_client = AIProjectClient(
-    endpoint=project_endpoint,
-    credential=DefaultAzureCredential()
-)
 user_functions = {get_transcript_text}
 functions = FunctionTool(user_functions)
 agent_instructions = (
@@ -37,6 +33,11 @@ def summarize_youtube_video(youtube_url: str):
     """
     print(f"\n--- Starting Summarization for: {youtube_url} ---")
     
+    project_client = AIProjectClient(
+        endpoint=project_endpoint,
+        credential=DefaultAzureCredential()
+    )
+
     with project_client:
         agents_client = project_client.agents
         functions = FunctionTool(user_functions)
