@@ -71,16 +71,18 @@ def summarize_youtube_video(youtube_url: str):
         agents_client.delete_agent(agent_id=agent.id)
         print("Deleted agent.")
 
-        messages = agents_client.messages.list(thread_id=thread.id, order=ListSortOrder.ASCENDING)     
+        summary_text = "No summary generated."
+        messages = agents_client.messages.list(thread_id=thread.id, order=ListSortOrder.DESCENDING)
         for msg in messages:
-            if msg.text_messages:
+            if msg.role == "assistant" and msg.text_messages:
                 last_text = msg.text_messages[-1]
+                summary_text = last_text.text['value']
                 print("\n--- FINAL SUMMARY ---\n")
-                print(last_text.text['value'])
+                print(summary_text)
                 print("\n---------------------\n")
-            
-            else:
-                print("🤷 Could not retrieve final summary message.")
+                break
+        
+        return summary_text
 
 # --- Main Execution Block ---
 
