@@ -1,7 +1,6 @@
 import os
 from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
-from azure.ai.agents import AgentsClient
 from azure.ai.projects import AIProjectClient
 from azure.ai.agents.models import (
     AgentEventHandler,
@@ -39,9 +38,10 @@ agent_instructions = (
 
 class MyEventHandler(AgentEventHandler):
 
-    def __init__(self, functions: FunctionTool) -> None:
+    def __init__(self, functions: FunctionTool, client) -> None:
         super().__init__()
         self.functions = functions
+        self.client = client
 
     def on_message_delta(self, delta: "MessageDeltaChunk") -> None:
         print(f"Text delta received: {delta.text}")
@@ -76,7 +76,7 @@ class MyEventHandler(AgentEventHandler):
             if tool_outputs:
                 # Once we receive 'requires_action' status, the next event will be DONE.
                 # Here we associate our existing event handler to the next stream.
-                agents_client.runs.submit_tool_outputs_stream(
+                self.client.runs.submit_tool_outputs_stream(
                     thread_id=run.thread_id, run_id=run.id, tool_outputs=tool_outputs, event_handler=self
                 )
 
@@ -94,19 +94,7 @@ class MyEventHandler(AgentEventHandler):
 
 # --- Core Agent Logic ---
 
-def get_agents_client() -> AgentsClient:
-    """Initializes and returns the dedicated AgentsClient."""
-    endpoint = os.getenv("PROJECT_ENDPOINT")
-    if not endpoint:
-        raise ValueError("PROJECT_ENDPOINT not found in .env file.")
-        
-    agents_client = AgentsClient(
-        endpoint=endpoint,
-        credential=DefaultAzureCredential()
-    )
-    return agents_client
-
-def summarize_youtube_video(agents_client: AgentsClient, youtube_url: str):
+def summarize_youtube_video(youtube_url: str):
     """
     Creates a thread, sends the URL, runs the agent, and retrieves the summary.
     """
@@ -139,7 +127,7 @@ def summarize_youtube_video(agents_client: AgentsClient, youtube_url: str):
         with agents_client.runs.stream(
             thread_id=thread.id,
             agent_id=agent.id,
-            event_handler=MyEventHandler(functions)
+            event_handler=MyEventHandler(functions, agents_client)
         ) as stream:
             stream.until_done()
 
@@ -161,12 +149,10 @@ def summarize_youtube_video(agents_client: AgentsClient, youtube_url: str):
 
 if __name__ == "__main__":
     try:
-        agents_client = get_agents_client()
-        
         # Example URL (replace with your test URL)
         test_url = "https://youtu.be/EwAd-fqQfJ8?si=WXbIn7IaHRpBJ8yQ" 
         
-        summarize_youtube_video(agents_client, test_url)
+        summarize_youtube_video(test_url)
  
     except ValueError as e:
         print(f"Configuration Error: {e}")
