@@ -1,9 +1,12 @@
+import os
 import re
 import sys
 from supadata import Supadata, SupadataError
+from dotenv import load_dotenv
 
+load_dotenv() 
 # Initialize the client
-supadata = Supadata(api_key="sd_f6643070a23929dc39204b05df6bd56d")
+supadata = Supadata(api_key=os.getenv("SUPADATA_API_KEY"))
 
 def get_transcript_text(youtube_url: str) -> str:
     """
