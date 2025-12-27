@@ -1,3 +1,5 @@
 streamlit
-# Add other dependencies required by agent_core here
-# e.g., openai, langchain, etc.
+python-dotenv
+supadata
+azure-identity
+azure-ai-projects
