@@ -11,14 +11,27 @@ This document describes the implementation strategy for adding Twitter and Linke
 
 ## Feature Overview
 
-| # | Feature | Description |
-|:--|:--------|:------------|
-| 1 | **Twitter-Optimized Summary + Post** | Generate a summary tailored for Twitter (≤280 chars, informal tone, hashtags) and post via API |
-| 2 | **LinkedIn-Optimized Summary + Post** | Generate a summary tailored for LinkedIn (≤3000 chars, professional tone) and post via API |
-| 3 | **SSO Login (Twitter/LinkedIn)** | OAuth2 authentication flow for both platforms |
-| 4 | **Logout** | Token revocation and session cleanup |
+| # | Feature | Description | Status |
+|:--|:--------|:------------|:-------|
+| 1 | **Twitter-Optimized Summary + Post** | Generate a summary tailored for Twitter (≤280 chars, informal tone, hashtags) and post via API | ✅ Complete |
+| 2 | **LinkedIn-Optimized Summary + Post** | Generate a summary tailored for LinkedIn (≤3000 chars, professional tone) and post via API | 🔲 Planned |
+| 3 | **SSO Login (Twitter/LinkedIn)** | OAuth2 authentication flow for both platforms | ✅ Twitter / 🔲 LinkedIn |
+| 4 | **Logout** | Token revocation and session cleanup | ✅ Twitter |
 
 ---
+
+## Implementation Notes (Twitter - Complete)
+
+> [!NOTE]
+> The following learnings from Twitter implementation affect LinkedIn assumptions.
+
+| Original Assumption | Actual Implementation | Impact on LinkedIn |
+|:--------------------|:----------------------|:-------------------|
+| Summary ≤280 chars is sufficient | LLM often exceeds limit; target **<150 chars** to leave room for URL + hashtags | LinkedIn may also need buffer; target **<2800 chars** |
+| Session state persists across OAuth redirect | Streamlit session resets on redirect; need **global verifier registry** | LinkedIn OAuth must also use `_PENDING_AUTHS` pattern |
+| `st.button` triggers OAuth | Button + link is two clicks; `st.link_button` is one click | Use `st.link_button` for LinkedIn too |
+| Post immediately after summary | Users want to review; added **confirmation UI** (Post/Cancel) | LinkedIn needs same confirmation flow |
+| No URL in summary | Users requested YouTube URL in post | Include source URL in LinkedIn posts too |
 
 ## 1. Integration Strategy
 
