@@ -27,16 +27,28 @@ This document serves as the primary architectural reference for the YouTube Summ
 
 | File | Responsibility |
 | :--- | :--- |
-| `app.py` | Entry point, Streamlit UI, top-level error handling. |
-| `agent_core/agent_client.py` | Azure AI Client lifecycle, Agent creation/deletion, message polling. |
+| `app.py` | Entry point, Streamlit UI, OAuth callback, platform selection, top-level error handling. |
+| `agent_core/agent_client.py` | Azure AI Client lifecycle, Agent creation/deletion, `get_instructions()`, `summarize_for_platform()`. |
 | `agent_core/youtube_tool.py` | Integration with Supadata API for transcript retrieval. |
 | `agent_core/event_handler.py` | Logic for handling streaming events and tool execution during runs. |
+| `agent_core/platform_adapter.py` | Platform config (Twitter/LinkedIn), character limit validation. |
+| `agent_core/twitter_tool.py` | Twitter API v2 posting with error handling. |
+| `agent_core/auth_manager.py` | OAuth2 flows with PKCE for Twitter/LinkedIn SSO. |
 | `role.json` | Azure RBAC custom role definition for necessary permissions. |
+| `tests/test_platform_adapter.py` | Unit tests for platform adapter and instructions. |
 
 ## 4. Technical Debt & Optimization Roadmap
 
 *   **[Critical] Agent Lifecycle:** Currently creates/deletes an Agent on every request. This adds ~3-5s of latency. *Fix: Use a persistent Agent ID.*
-*   **[Medium] Hardcoded Prompts:** Agent instructions are embedded in Python code. *Fix: Move to external config or Azure Foundry definition.*
+*   **[Resolved] ~~Hardcoded Prompts:~~** Agent instructions moved to `get_instructions(platform)` function supporting platform-specific prompts (Twitter/LinkedIn).
 *   **[Medium] Sync Blocking:** UI blocks during the entire summarization process. *Fix: Implement async processing or Streamlit fragments/callbacks.*
 *   **[Low] Persistance:** Threads are abandoned. *Fix: Store Thread IDs in local session storage or a DB to allow "Recent Summaries" feature.*
 *   **[Low] Error Handling:** Minimal retry logic for API failures or network timeouts.
+
+## 5. New Feature: Social Media Posting (v1.1)
+
+Implemented Twitter posting integration with:
+- Platform-specific summarization (≤280 chars, hashtags)
+- OAuth2 authentication with PKCE in sidebar
+- Character count validation before posting
+- Error handling for rate limits and auth failures
