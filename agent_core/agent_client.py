@@ -41,6 +41,18 @@ def get_instructions(platform: str = "default") -> str:
             "\n\nFORMAT: Return ONLY the raw text. No quotes, intro, or hashtags. "
             "If transcript fails, respond with 'Error: Transcript unavailable' (under 30 chars)."
         )
+    elif platform == "linkedin":
+        return (
+            "You are a LinkedIn content strategist. Summarize a video for a professional audience. "
+            "CONSTRAINT: Your response MUST be UNDER 2800 characters to leave room for a URL. "
+            "\n\nSTEPS: "
+            "1. Call `get_transcript_text` to get the video content. "
+            "2. Identify 3-5 key insights or takeaways. "
+            "3. Structure using bullet points or numbered list. "
+            "4. Use a professional, value-driven tone (e.g. 'Key insight for [industry]:'). "
+            "\n\nFORMAT: Return ONLY the summary text. No intro preamble. "
+            "If transcript fails, respond with 'Error: Transcript unavailable'."
+        )
     # Default instructions (original behavior)
     return (
         "You are an expert YouTube summarizer. Your only job is to analyze the user's input. "

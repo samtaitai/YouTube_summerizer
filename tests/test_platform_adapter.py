@@ -28,10 +28,19 @@ class TestPlatformConfig:
         """Verify Twitter config is defined."""
         assert "twitter" in PLATFORM_CONFIG
         
+    def test_linkedin_config_exists(self):
+        """Verify LinkedIn config is defined."""
+        assert "linkedin" in PLATFORM_CONFIG
+        
     def test_twitter_max_chars(self):
         """Verify Twitter character limit is 280."""
         config = get_platform_config("twitter")
         assert config["max_chars"] == 280
+
+    def test_linkedin_max_chars(self):
+        """Verify LinkedIn character limit is 3000."""
+        config = get_platform_config("linkedin")
+        assert config["max_chars"] == 3000
         
     def test_default_config_no_limit(self):
         """Verify default platform has no character limit."""
@@ -57,6 +66,16 @@ class TestSummaryValidation:
         """Verify text >280 chars fails validation."""
         text = "A" * 281
         assert validate_summary_length(text, "twitter") is False
+
+    def test_linkedin_summary_length_valid(self):
+        """Verify text ≤3000 chars passes validation."""
+        text = "A" * 3000
+        assert validate_summary_length(text, "linkedin") is True
+        
+    def test_linkedin_summary_length_invalid(self):
+        """Verify text >3000 chars fails validation."""
+        text = "A" * 3001
+        assert validate_summary_length(text, "linkedin") is False
         
     def test_default_summary_no_limit(self):
         """Verify default platform accepts any length."""
@@ -107,8 +126,15 @@ class TestGetInstructions:
     def test_get_instructions_twitter(self):
         """Verify Twitter-specific instructions."""
         instructions = get_instructions("twitter")
-        assert "280" in instructions or "Twitter" in instructions
+        assert "150" in instructions or "Twitter" in instructions
         assert "hashtag" in instructions.lower()
+
+    def test_get_instructions_linkedin(self):
+        """Verify LinkedIn-specific instructions."""
+        instructions = get_instructions("linkedin")
+        assert "2800" in instructions or "LinkedIn" in instructions
+        assert "professional" in instructions.lower()
+        assert "bullet points" in instructions.lower()
         
     def test_legacy_function_unchanged(self):
         """

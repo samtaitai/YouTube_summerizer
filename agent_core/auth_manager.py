@@ -38,7 +38,7 @@ OAUTH_CONFIG = {
         "token_url": "https://www.linkedin.com/oauth/v2/accessToken",
         # LinkedIn doesn't have a standard token revocation endpoint
         "revoke_url": None,
-        "scopes": ["r_liteprofile", "w_member_social"],
+        "scopes": ["openid", "profile", "w_member_social"],
         "client_id_env": "LINKEDIN_CLIENT_ID",
         "client_secret_env": "LINKEDIN_CLIENT_SECRET",
     },
@@ -60,8 +60,8 @@ def _generate_pkce_challenge(verifier: str) -> str:
 
 
 # Global registry for pending authentications to survive session resets (Streamlit specific issue)
-# Format: {state: {"verifier": code_verifier, "timestamp": time}}
-_PENDING_AUTHS: Dict[str, str] = {}
+# Format: {state: {"verifier": code_verifier, "platform": platform, "timestamp": time}}
+_PENDING_AUTHS: Dict[str, Dict[str, str]] = {}
 
 
 def get_oauth_url(platform: str, redirect_uri: str = None) -> tuple[str, str]:
@@ -74,7 +74,7 @@ def get_oauth_url(platform: str, redirect_uri: str = None) -> tuple[str, str]:
         
     Returns:
         Tuple of (authorization_url, state)
-        The state is used to retrieve the verifier after redirect.
+        The state is used to retrieve the verifier and platform after redirect.
         
     Raises:
         ValueError: If platform is not supported
@@ -97,7 +97,7 @@ def get_oauth_url(platform: str, redirect_uri: str = None) -> tuple[str, str]:
     state = secrets.token_urlsafe(16)
     
     # Store verifier globally keyed by state to survive session resets
-    _PENDING_AUTHS[state] = code_verifier
+    _PENDING_AUTHS[state] = {"verifier": code_verifier, "platform": platform}
     
     # Build authorization URL
     params = {
@@ -106,17 +106,21 @@ def get_oauth_url(platform: str, redirect_uri: str = None) -> tuple[str, str]:
         "redirect_uri": redirect_uri,
         "scope": " ".join(config["scopes"]),
         "state": state,
-        "code_challenge": code_challenge,
-        "code_challenge_method": "S256",
     }
+
+    # Only include PKCE for Twitter as it's required. 
+    # LinkedIn requires manual activation for PKCE.
+    if platform == "twitter":
+        params["code_challenge"] = code_challenge
+        params["code_challenge_method"] = "S256"
     
     auth_url = f"{config['auth_url']}?{urlencode(params)}"
     
     return auth_url, state
 
 
-def get_verifier_from_state(state: str) -> Optional[str]:
-    """Retrieves and removes the code verifier for a given state."""
+def get_pending_auth(state: str) -> Optional[Dict[str, str]]:
+    """Retrieves and removes the pending auth info for a given state."""
     return _PENDING_AUTHS.pop(state, None)
 
 
@@ -156,30 +160,58 @@ def exchange_code_for_token(
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": redirect_uri,
-        "code_verifier": code_verifier,
     }
     
-    # Twitter requires Basic auth, LinkedIn uses POST body
+    # Only include verifier if it's Twitter (PKCE enabled)
+    if platform == "twitter" and code_verifier:
+        data["code_verifier"] = code_verifier
+    
+    # Twitter works best with Basic Auth; LinkedIn often requires credentials in the POST body
     if platform == "twitter":
         auth = (client_id, client_secret)
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        response = requests.post(
-            config["token_url"], 
-            data=data, 
-            auth=auth, 
-            headers=headers,
-            timeout=30
-        )
+        response = requests.post(config["token_url"], data=data, auth=auth, headers=headers, timeout=30)
     else:
+        # LinkedIn implementation
         data["client_id"] = client_id
         data["client_secret"] = client_secret
-        response = requests.post(config["token_url"], data=data, timeout=30)
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        response = requests.post(config["token_url"], data=data, headers=headers, timeout=30)
     
     if response.status_code != 200:
         error_detail = response.json().get("error_description", response.text)
         raise AuthError(f"Token exchange failed: {error_detail}")
     
     return response.json()
+
+
+def get_linkedin_user_urn(access_token: str) -> str:
+    """
+    Fetches the authenticated user's LinkedIn URN ID.
+    
+    Args:
+        access_token: LinkedIn OAuth 2.0 access token
+        
+    Returns:
+        The alphanumeric ID part of the user's URN (e.g., "AbC123xYz")
+        
+    Raises:
+        AuthError: If fetching profile fails
+    """
+    endpoint = "https://api.linkedin.com/v2/userinfo"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        
+        if response.status_code != 200:
+            error_detail = response.json().get("message", response.text)
+            raise AuthError(f"Failed to fetch LinkedIn user info: {error_detail}")
+        
+        # User ID is in the 'sub' field for OpenID Connect
+        return response.json().get("sub")
+    except requests.exceptions.RequestException as e:
+        raise AuthError(f"LinkedIn profile request failed: {str(e)}")
 
 
 def revoke_token(platform: str, token: str) -> bool:

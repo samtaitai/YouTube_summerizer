@@ -4,6 +4,7 @@ from urllib.parse import urlparse, parse_qs
 from agent_core.agent_client import summarize_youtube_video, summarize_for_platform
 from agent_core import auth_manager
 from agent_core.twitter_tool import post_to_twitter, TwitterAPIError, TwitterAuthError, TwitterRateLimitError
+from agent_core.linkedin_tool import post_to_linkedin, LinkedInAPIError, LinkedInAuthError, LinkedInRateLimitError
 
 # --- Page Configuration ---
 st.set_page_config(page_title="YouTube Summarizer", page_icon="📺", layout="wide")
@@ -13,8 +14,12 @@ if "twitter_token" not in st.session_state:
     st.session_state["twitter_token"] = None
 if "linkedin_token" not in st.session_state:
     st.session_state["linkedin_token"] = None
+if "linkedin_urn" not in st.session_state:
+    st.session_state["linkedin_urn"] = None
 if "twitter_auth_url" not in st.session_state:
     st.session_state["twitter_auth_url"] = None
+if "linkedin_auth_url" not in st.session_state:
+    st.session_state["linkedin_auth_url"] = None
 if "pending_post" not in st.session_state:
     st.session_state["pending_post"] = None  # Stores the generated post awaiting confirmation
 
@@ -25,29 +30,41 @@ if "code" in query_params:
     if isinstance(state, list):
         state = state[0]
         
-    verifier = auth_manager.get_verifier_from_state(state) if state else None
+    pending_auth = auth_manager.get_pending_auth(state) if state else None
     
-    if verifier:
+    if pending_auth:
         try:
             code = query_params["code"]
             if isinstance(code, list):
                 code = code[0]
                 
+            platform = pending_auth["platform"]
+            verifier = pending_auth["verifier"]
+            
             token_response = auth_manager.exchange_code_for_token(
-                "twitter",
+                platform,
                 code,
                 verifier
             )
-            st.session_state["twitter_token"] = token_response
-            st.session_state["twitter_auth_url"] = None
+            
+            st.session_state[f"{platform}_token"] = token_response
+            st.session_state[f"{platform}_auth_url"] = None
+            
+            # For LinkedIn, we also need to fetch the User URN
+            if platform == "linkedin":
+                access_token = auth_manager.get_access_token("linkedin", st.session_state)
+                urn = auth_manager.get_linkedin_user_urn(access_token)
+                st.session_state["linkedin_urn"] = urn
+                
             st.query_params.clear()
-            st.success("🎉 Successfully connected to Twitter!")
+            st.success(f"🎉 Successfully connected to {platform.capitalize()}!")
             st.rerun()
         except auth_manager.AuthError as e:
             st.error(f"Authentication failed: {e}")
             st.query_params.clear()
     else:
-        if not st.session_state.get("twitter_token"):
+        # Check if we're not authenticated to any platform and show warning
+        if not (st.session_state.get("twitter_token") or st.session_state.get("linkedin_token")):
             st.warning("⚠️ Authentication session expired. Please try logging in again.")
         st.query_params.clear()
 
@@ -57,15 +74,13 @@ with st.sidebar:
     
     # Twitter Authentication
     if not auth_manager.is_authenticated("twitter", st.session_state):
-        # Pre-generate auth URL if not present
         if not st.session_state.get("twitter_auth_url"):
             try:
-                auth_url, state = auth_manager.get_oauth_url("twitter")
+                auth_url, _ = auth_manager.get_oauth_url("twitter")
                 st.session_state["twitter_auth_url"] = auth_url
             except Exception as e:
-                st.error(f"Error initializing login: {e}")
+                st.error(f"Error initializing Twitter login: {e}")
         
-        # Direct redirect button
         if st.session_state.get("twitter_auth_url"):
             st.link_button("🐦 Login with Twitter", st.session_state["twitter_auth_url"], use_container_width=True)
     else:
@@ -76,11 +91,31 @@ with st.sidebar:
                 auth_manager.revoke_token("twitter", token)
             st.session_state["twitter_token"] = None
             st.session_state["twitter_auth_url"] = None
-            st.session_state["pending_post"] = None
+            st.rerun()
+
+    st.divider()
+
+    # LinkedIn Authentication
+    if not auth_manager.is_authenticated("linkedin", st.session_state):
+        if not st.session_state.get("linkedin_auth_url"):
+            try:
+                auth_url, _ = auth_manager.get_oauth_url("linkedin")
+                st.session_state["linkedin_auth_url"] = auth_url
+            except Exception as e:
+                st.error(f"Error initializing LinkedIn login: {e}")
+        
+        if st.session_state.get("linkedin_auth_url"):
+            st.link_button("🔗 Login with LinkedIn", st.session_state["linkedin_auth_url"], use_container_width=True)
+    else:
+        st.success("✓ LinkedIn connected")
+        if st.button("Logout LinkedIn", use_container_width=True):
+            st.session_state["linkedin_token"] = None
+            st.session_state["linkedin_urn"] = None
+            st.session_state["linkedin_auth_url"] = None
             st.rerun()
     
     st.divider()
-    st.caption("ℹ️ Twitter allows ~50 tweets per 24 hours")
+    st.caption("ℹ️ Posting limits: Twitter (~50/day), LinkedIn (varies)")
 
 # --- Main Content ---
 st.title("📺 YouTube Video Summarizer")
@@ -96,11 +131,15 @@ def cancel_post():
 # --- Confirmation Flow: If there's a pending post, show confirmation UI ---
 if st.session_state.get("pending_post"):
     pending = st.session_state["pending_post"]
+    platform = pending.get("platform", "twitter")
+    limit = 3000 if platform == "linkedin" else 280
     
     st.markdown("---")
-    st.subheader("📝 Proposed Post")
+    st.subheader(f"📝 Proposed {platform.capitalize()} Post")
     st.info(pending["text"])
-    st.markdown(f"**Character count:** {len(pending['text'])}/280")
+    
+    color = "green" if len(pending['text']) <= limit else "red"
+    st.markdown(f"**Character count:** :{color}[{len(pending['text'])}/{limit}]")
     
     # Custom CSS for the Post button color (pale green)
     st.markdown("""
@@ -120,21 +159,28 @@ if st.session_state.get("pending_post"):
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("✅ Post to Twitter", type="primary", use_container_width=True):
+        button_text = f"✅ Post to {platform.capitalize()}"
+        if st.button(button_text, type="primary", use_container_width=True):
             with st.spinner("Posting..."):
                 try:
-                    token = auth_manager.get_access_token("twitter", st.session_state)
-                    result = post_to_twitter(pending["text"], token)
-                    tweet_id = result.get("data", {}).get("id")
-                    st.success(f"✅ Posted! [View tweet](https://twitter.com/i/web/status/{tweet_id})")
+                    token = auth_manager.get_access_token(platform, st.session_state)
+                    if platform == "twitter":
+                        result = post_to_twitter(pending["text"], token)
+                        tweet_id = result.get("data", {}).get("id")
+                        st.success(f"✅ Posted! [View tweet](https://twitter.com/i/web/status/{tweet_id})")
+                    else:
+                        urn = st.session_state.get("linkedin_urn")
+                        result = post_to_linkedin(pending["text"], token, urn)
+                        st.success("✅ Successfully posted to LinkedIn!")
+                        
                     st.session_state["pending_post"] = None
-                except TwitterAuthError as e:
+                except (TwitterAuthError, LinkedInAuthError) as e:
                     st.error(f"🔒 {e}")
-                    st.session_state["twitter_token"] = None
+                    st.session_state[f"{platform}_token"] = None
                     st.session_state["pending_post"] = None
-                except TwitterRateLimitError as e:
+                except (TwitterRateLimitError, LinkedInRateLimitError) as e:
                     st.error(f"⏱️ {e}")
-                except (TwitterAPIError, ValueError) as e:
+                except (TwitterAPIError, LinkedInAPIError, ValueError) as e:
                     st.error(f"❌ Failed: {e}")
     with col2:
         if st.button("❌ Cancel", use_container_width=True, on_click=cancel_post):
@@ -149,7 +195,7 @@ youtube_url = st.text_input(
     key="youtube_url"
 )
 
-platform_options = ["Default", "Twitter"]
+platform_options = ["Default", "Twitter", "LinkedIn"]
 selected_platform = st.selectbox(
     "Summary Format",
     options=platform_options,
@@ -157,23 +203,23 @@ selected_platform = st.selectbox(
     help="Select target platform for optimized summary format"
 )
 
-platform_map = {"Default": "default", "Twitter": "twitter"}
+platform_map = {"Default": "default", "Twitter": "twitter", "LinkedIn": "linkedin"}
 platform = platform_map.get(selected_platform, "default")
 
-if platform == "twitter":
-    st.info("🐦 Twitter mode: Summary will be tiny to fit URL and hashtags.")
-    if not auth_manager.is_authenticated("twitter", st.session_state):
-        st.warning("⚠️ Connect in sidebar to post directly.")
+if platform != "default":
+    st.info(f"📱 {selected_platform} mode: Summary will be optimized for {selected_platform}.")
+    if not auth_manager.is_authenticated(platform, st.session_state):
+        st.warning(f"⚠️ Connect {selected_platform} in sidebar to post directly.")
 
 col1, col2, col3 = st.columns([2, 2, 1])
 with col1:
     summarize_only = st.button("📝 Summarize Video", type="primary")
 with col2:
-    can_post = platform == "twitter" and auth_manager.is_authenticated("twitter", st.session_state)
+    can_post = platform != "default" and auth_manager.is_authenticated(platform, st.session_state)
     summarize_and_post = st.button(
         "📝 Summarize & Post",
         disabled=not can_post,
-        help="Generate & post to Twitter" if can_post else "Login to Twitter first"
+        help=f"Generate & post to {platform.capitalize()}" if can_post else f"Login to {platform.capitalize()} first"
     )
 with col3:
     st.button("🔄 Reset", on_click=clear_input)
@@ -191,28 +237,37 @@ if summarize_only or summarize_and_post:
                 else:
                     summary = summarize_for_platform(youtube_url, platform)
                     
-                    # Build final tweet
-                    hashtags = " #AI #Summary"
-                    url_length = 23  # Twitter standard
-                    
-                    char_count = len(summary) + len(hashtags) + 1 + url_length
-                    
-                    if char_count > 280:
-                        max_summary_len = 280 - len(hashtags) - 24 - 3 
-                        summary = summary[:max_summary_len] + "..."
-                        st.warning("⚠️ Summary truncated to fit Twitter limit.")
-                    
-                    final_post = f"{summary}{hashtags} {youtube_url}"
+                    if platform == "twitter":
+                        # Build final tweet
+                        hashtags = " #AI #Summary"
+                        url_length = 23  # Twitter standard
+                        char_count = len(summary) + len(hashtags) + 1 + url_length
+                        
+                        if char_count > 280:
+                            max_summary_len = 280 - len(hashtags) - 24 - 3 
+                            summary = summary[:max_summary_len] + "..."
+                            st.warning("⚠️ Summary truncated to fit Twitter limit.")
+                        
+                        final_post = f"{summary}{hashtags} {youtube_url}"
+                        limit = 280
+                    else:
+                        # LinkedIn
+                        final_post = f"{summary}\n\nSource: {youtube_url}"
+                        limit = 3000
                     
                     if summarize_and_post:
                         # Store for confirmation
-                        st.session_state["pending_post"] = {"text": final_post, "url": youtube_url}
+                        st.session_state["pending_post"] = {
+                            "text": final_post, 
+                            "url": youtube_url,
+                            "platform": platform
+                        }
                         st.rerun()
                     else:
                         # Just display
                         st.success("Generated Successfully!")
-                        color = "green" if len(final_post) <= 280 else "red"
-                        st.markdown(f"**Character count:** :{color}[{len(final_post)}/280]")
+                        color = "green" if len(final_post) <= limit else "red"
+                        st.markdown(f"**Character count:** :{color}[{len(final_post)}/{limit}]")
                         st.markdown(f"### Proposed Post\n{final_post}")
                         
             except Exception as e:
