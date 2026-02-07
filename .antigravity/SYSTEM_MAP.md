@@ -64,8 +64,8 @@ This document serves as the primary architectural reference for the YouTube Summ
 | Twitter OAuth SSO | ✅ Complete | PKCE flow, global verifier registry |
 | Twitter Posting | ✅ Complete | <150 char summary + URL + hashtags |
 | Post Confirmation UI | ✅ Complete | Post/Cancel buttons before publishing |
-| LinkedIn SSO | 🔲 Planned | Design exists, not implemented |
-| LinkedIn Posting | 🔲 Planned | Design exists, not implemented |
+| LinkedIn SSO | ✅ Complete | PKCE flow, User URN retrieval |
+| LinkedIn Posting | ✅ Complete | Directly to member profile |
 
 ## 6. Environment Variables
 
@@ -77,4 +77,6 @@ This document serves as the primary architectural reference for the YouTube Summ
 | `SUPADATA_API_KEY` | Supadata transcript API key |
 | `TWITTER_CLIENT_ID` | Twitter OAuth2 Client ID |
 | `TWITTER_CLIENT_SECRET` | Twitter OAuth2 Client Secret |
+| `LINKEDIN_CLIENT_ID` | LinkedIn OAuth2 Client ID |
+| `LINKEDIN_CLIENT_SECRET` | LinkedIn OAuth2 Client Secret |
 | `OAUTH_REDIRECT_URI` | OAuth callback URL (`http://localhost:8501/`) |
